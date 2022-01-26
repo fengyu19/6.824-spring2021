@@ -1,3 +1,4 @@
+// https://www.jianshu.com/p/4147cc957400?utm_campaign=maleskine&utm_content=note&utm_medium=seo_notes&utm_source=recommendation
 package raft
 
 //
@@ -18,14 +19,27 @@ package raft
 //
 
 import (
-//	"bytes"
+	//	"bytes"
 	"sync"
 	"sync/atomic"
-
-//	"6.824/labgob"
+	//	"6.824/labgob"
 	"6.824/labrpc"
 )
 
+type State int
+
+const (
+	Follower State = iota // value --> 0
+	Candidate			  // value --> 1
+	Leader			 	  // value --> 2
+)
+
+const NULL int = -1
+
+type Log struct {
+	Term  	int
+	Command interface{}
+}
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -63,7 +77,26 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	state State
 
+	// Persistent state on all servers:
+	currentTerm int
+	votedFor 	int
+	log 		[]Log
+
+	// Volatile state on all servers:
+	commitIndex int
+	lastApplied int
+
+	// Volatile state on leaders:
+	nextIndex	[]int
+	matchIndex	[]int
+
+	// channel
+	applyCh 	chan ApplyMsg
+	// handle rpc
+	voteCh		chan bool
+	appendLogCh	chan bool
 }
 
 // return currentTerm and whether this server
@@ -73,6 +106,8 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	term = rf.currentTerm
+	isleader = rf.state == Leader
 	return term, isleader
 }
 
@@ -143,6 +178,10 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term			int
+	CandidateId 	int
+	LastLogIndex	int
+	LastLogTerm		int
 }
 
 //
@@ -151,6 +190,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term			int
+	VotedGranted	bool
 }
 
 //
@@ -192,6 +233,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
+}
+
+
+type AppendEntriesArgs struct {
+	Term			int
+	LeaderId 		int
+	PreLogIndex		int
+	PrevLogTerm		int
+	Entries 		[]Log
+	LeaderCommit	int
+}
+
+type AppendEntriesReply struct {
+	Term 			int
+	Success			bool
 }
 
 
@@ -272,6 +328,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.state = Follower
+	rf.currentTerm = 0
+	rf.votedFor = NULL
+	rf.log = make([]Log, 0)
+
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make([]int, len(peers))
+	rf.matchIndex = make([]int, len(peers))
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
